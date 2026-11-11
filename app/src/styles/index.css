@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+/*
+ * Design language: "warehouse control room" — deep navy canvas, faint blueprint grid,
+ * glass panels, and data colours from the validated palette (dataviz skill, dark mode,
+ * checked against the panel surface #0f1522: all checks pass).
+ */
+@theme {
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  /* canvas & surfaces */
+  --color-canvas: #070b14;
+  --color-canvas-2: #0b1324;
+  --color-panel: #0f1522;
+  --color-line: rgb(148 163 184 / 0.14);
+  --color-line-strong: rgb(148 163 184 / 0.28);
+
+  /* text tokens (text never wears a data colour) */
+  --color-ink: #e6eaf2;
+  --color-ink-2: #a9b4c7;
+  --color-ink-3: #6b7a93;
+
+  /* UI accents (chrome only) */
+  --color-accent: #5598e7;
+  --color-ai: #9085e9;
+
+  /* data series — fixed order, validated (dark) */
+  --color-s-ai: #3987e5;
+  --color-s-base: #d95926;
+  --color-s-mc: #199e70;
+  --color-s-4: #c98500;
+  --color-s-actual: #cbd5e1;
+
+  /* status — reserved, always with icon + label */
+  --color-good: #0ca30c;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  background-image:
+    radial-gradient(1200px 600px at 85% -10%, rgb(57 135 229 / 0.12), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgb(144 133 233 / 0.08), transparent 60%),
+    linear-gradient(rgb(148 163 184 / 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(148 163 184 / 0.035) 1px, transparent 1px);
+  background-size: auto, auto, 32px 32px, 32px 32px;
+  background-attachment: fixed;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .glass {
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.045), rgb(255 255 255 / 0.02));
+    background-color: rgb(15 21 34 / 0.72);
+    border: 1px solid var(--color-line);
+    border-radius: 16px;
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.05),
+      0 12px 40px -18px rgb(0 0 0 / 0.6);
+    backdrop-filter: blur(16px) saturate(130%);
+    -webkit-backdrop-filter: blur(16px) saturate(130%);
+  }
+
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  .focus-ring {
+    outline: none;
+  }
+  .focus-ring:focus-visible {
+    box-shadow: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-accent);
+  }
+
+  /* range slider */
+  .range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 22px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--color-accent) var(--fill, 50%), rgb(148 163 184 / 0.25) var(--fill, 50%));
+  }
+  .range::-moz-range-track {
+    height: 4px;
+    border-radius: 999px;
+    background: rgb(148 163 184 / 0.25);
+  }
+  .range::-moz-range-progress {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--color-accent);
+  }
+  .range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    margin-top: -6px;
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--color-ink);
+    border: 3px solid var(--color-accent);
+    box-shadow: 0 0 0 4px rgb(85 152 231 / 0.18);
+  }
+  .range::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--color-ink);
+    border: 3px solid var(--color-accent);
+  }
+  .range:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 5px rgb(85 152 231 / 0.45);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

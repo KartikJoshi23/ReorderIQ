@@ -1,0 +1,38 @@
+# Netlify configuration for the ReorderIQ dashboard (static site; no server functions).
+
+[build]
+  base = "app"            # the Vite project lives in app/
+  command = "npm run build"
+  publish = "dist"        # relative to base → app/dist
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Cross-origin isolation enables SharedArrayBuffer → multi-threaded TensorFlow.js WebAssembly.
+# Every asset is same-origin (fonts are self-hosted), so require-corp is safe.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "require-corp"
+    Cross-Origin-Resource-Policy = "same-origin"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+# Hashed build assets never change → cache for a year.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/data/*"
+  [headers.values]
+    Cache-Control = "public, max-age=300"
+
+# Single-page app (hash routing); any other path serves the app shell.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

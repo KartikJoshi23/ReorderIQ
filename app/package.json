@@ -1,0 +1,40 @@
+{
+  "name": "reorder-iq",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AI-enhanced reorder point & inventory management dashboard (Favorita FMCG data)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --pretty",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "5.2.5",
+    "@fontsource/jetbrains-mono": "5.2.5",
+    "@tensorflow/tfjs": "4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "4.22.0",
+    "comlink": "4.4.2",
+    "echarts": "5.6.0",
+    "framer-motion": "11.18.2",
+    "lucide-react": "0.511.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zod": "3.24.4",
+    "zustand": "5.0.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.1.8",
+    "@types/node": "22.15.21",
+    "@types/react": "18.3.21",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.4.1",
+    "tailwindcss": "4.1.8",
+    "typescript": "5.8.3",
+    "vite": "6.3.5",
+    "vitest": "3.1.4"
+  }
+}

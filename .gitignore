@@ -1,0 +1,30 @@
+# --- Data: never commit (Kaggle competition rules + slide note "No sharing of data with peers") ---
+/store-sales-time-series-forecasting/
+/data/
+*.csv
+
+# --- Secrets (data-pack passphrase) ---
+.env
+.env.*
+
+# --- Python ---
+__pycache__/
+.venv/
+.ipynb_checkpoints/
+
+# --- Node / build ---
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Local Claude Code tool settings ---
+.claude/
+*.tsbuildinfo
