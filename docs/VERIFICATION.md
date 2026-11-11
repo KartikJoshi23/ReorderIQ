@@ -407,3 +407,62 @@ The storage check uses capacity = 18 × forecast mean, as on the Optimisation pa
 - **README:** overview, slide mapping, architecture, run, deploy and take-down steps.
 - **Project name:** **ReorderIQ** in the page title and meta description, the header, the start screen, `package.json`, the README and `netlify.toml`.
 - **Checks:** `npm test` passes 15 files and **92 tests**; `npm run build` (type-check + Vite) passes with 0 errors.
+
+---
+
+## Phase 4 — Live audit (https://reorderiq.netlify.app)
+
+### P1. Deployment checks
+
+| Check | Result |
+|---|---|
+| Response headers (`curl`) | COOP `same-origin`, COEP `require-corp`, CORP, nosniff, Referrer-Policy, Permissions-Policy on every path ✓ |
+| Caching | `/assets/*` immutable for 1 year; `/data/*` 5 min; HTML must-revalidate ✓ |
+| Cross-origin isolation in the browser | `crossOriginIsolated = true`, `SharedArrayBuffer` available. Multi-threaded WebAssembly is active ✓ |
+| Data pack | 231,687 bytes, `application/json`, validated by the schema on load ✓ |
+| Full pipeline on the live site (44-BEVERAGES) | fast forecast in seconds; **LSTM trained, WAPE 12.0%**, identical to local ✓ |
+| Console | 0 errors ✓ |
+| Note | Netlify injects its own "Powered by Netlify" badge script (`/.netlify/scripts/hud`). It is not part of the app |
+
+### P2. Feature tests (same build, driven through the app state)
+
+| Feature | Result |
+|---|---|
+| Release all held-back data | 56 days released; forecast re-issued from 2017-08-16; LSTM fine-tuned ✓ |
+| Add new days beyond the dataset (CSV `date,sales,onpromotion`) | 3 days added (2017-08-16 → 18), marked as user data, models updated ✓ |
+| Gap protection | a row for 2017-08-18 without 16–17 is rejected: "Missing data for 2017-08-16 …" ✓ |
+| Lead-time records (CSV `order_date,receipt_date`) | 5 records → empirical model, mean 7.4 d, σ_L 2.07 d ✓ |
+| Switch series during a replay | stale replay dropped; new replay (47-BEVERAGES) = offline numbers: 99.33% $77 / 99.46% $75 / 100.00% $72 ✓ |
+| Grid check and frontier while settings change | both return to idle, no frozen button (after fix 2) ✓ |
+| Phone width 375 px, all 8 pages | no horizontal page overflow (after fix 5); wide tables scroll inside their own box ✓ |
+
+### P3. Defects found and fixed in the audit
+
+1. **Missing asset served as HTML (deployment).**
+   - *Cause:* the SPA fallback answered a missing `/assets/…js` with `index.html`, status 200 and a one-year immutable cache header. After a redeploy, a tab opened on the old version would receive HTML for its old chunks and cache it.
+   - *Fix:* `/assets/*` and `/data/*` now return a real 404 (`404.html`).
+   - *Recovery:* a failed page chunk triggers one automatic reload to the current version. A session flag prevents reload loops.
+2. **"Verify vs grid" and "Compute frontier" could freeze at "running".**
+   - *Cause:* when the optimisation restarted (LSTM finished, a slider moved, a series switch), the running check's result was discarded but its status was never reset, so its button stayed disabled.
+   - *Fix:* a restart or series switch resets both statuses, and an error is only reported for the current run.
+3. **Lead-time sliders out of step with uploaded records.**
+   - *Cause:* with the empirical model, moving L or σ_L changed the formula while Monte Carlo and simulations kept sampling the records.
+   - *Fix:* moving a slider switches to Gamma (the records stay selectable), and selecting "Empirical" restores the records' own mean and SD.
+4. **No error boundary.** A render error on one page would blank the whole dashboard. Each page is now wrapped in a boundary that shows the error with a reload button; navigation keeps working.
+5. **Forecast page overflowed on phones** (537 px on a 375 px screen). Card header buttons were set not to shrink. They now wrap inside the card.
+6. **Smaller fixes:**
+   - **Status message:** it stayed at "Models are updating…" after the update finished. It now reports "Models updated (vN, WAPE x%)".
+   - **Replay cancellation:** switching series now cancels queued replay re-forecasts for the previous series.
+
+7. **Ensemble backtest folds misaligned after a fine-tune (correctness).**
+   - *Cause:* the ensemble combines fold k of every model, so all models must share fold origins. After new data, Holt-Winters, Ridge and the benchmarks were re-backtested from the new date, but the LSTM kept its folds from its training date.
+     - After a 7-day release the shift is a whole week, so weekdays still lined up and it went unnoticed.
+     - After a 1–2-day release, forecasts for different weekdays were blended and scored against the wrong actuals. The ensemble WAPE jumped from 13.0% to 20.6% after two days, with knock-on effects on the weights, the prediction bands and the Monte Carlo error resamples.
+   - *Fix:* the engine keeps every forecast the LSTM actually issued, by origin. These are all out-of-sample: the rolling-backtest folds plus each later run's forecast. After a fine-tune, the backtest uses the latest 6 complete, non-overlapping origins from that set, and every model is backtested at exactly those origins.
+   - *Effect:* a 1-day update leaves the backtest unchanged, because no new 28-day window is complete yet. 28 days later, the LSTM's real forecast from that date joins the backtest, so the ensemble weights keep adapting.
+   - *Tests:* `rollingOrigins` unit test; engine test asserting identical origins for ETS, Ridge, LSTM, benchmarks and ensemble after a 1-day update, and the 28-day roll-forward.
+8. **New data during the first LSTM training waited for an obsolete result.**
+   - *Cause:* releasing or adding data in the first ~50 s queued the update behind the full LSTM training on the old data, whose result was then discarded. The progress bar showed a stale "Fitting Holt-Winters… 2%" meanwhile.
+   - *Fix:* while no LSTM has been trained yet, an update cancels that training and trains on the new data straight away. A fine-tune in progress is left to finish, so rapid clicks never force a full retrain. A queued update now shows "Waiting for the previous model update".
+
+After the fixes: `npm test` passes **93 tests**; `npm run build` passes with 0 errors.

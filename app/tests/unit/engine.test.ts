@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { DEMO_SERIES_ID, generateDemoPack } from "../../src/data/demo";
 import { initialAsOf, releaseDays, seriesFromPack } from "../../src/data/series";
-import { CancelledError, DEFAULT_ENGINE_SETTINGS, type EngineProgress, ForecastEngine } from "../../src/models/engine";
+import { CancelledError, DEFAULT_ENGINE_SETTINGS, type EngineProgress, ForecastEngine, rollingOrigins } from "../../src/models/engine";
 import { DEFAULT_LSTM_CONFIG } from "../../src/models/lstm";
 
 const s = seriesFromPack(generateDemoPack(2026), DEMO_SERIES_ID);
@@ -29,6 +29,17 @@ describe("ForecastEngine without LSTM", () => {
     }
     expect(r.foldErrors).toHaveLength(6);
     expect(r.drivers.weekday[6]).toBeGreaterThan(1.2); // Sunday uplift vs Monday
+  });
+});
+
+describe("rollingOrigins (backtest folds after a fine-tune)", () => {
+  it("picks the latest complete, non-overlapping origins, oldest first", () => {
+    const issued = [100, 128, 156, 184, 212, 240, 268, 269, 270];
+    // As of 297: 269 is complete (269 + 28 ≤ 297), 270 is not; 268 overlaps 269 and is skipped.
+    expect(rollingOrigins(issued, 297, 28, 6)).toEqual([128, 156, 184, 212, 240, 269]);
+    // As of 268: the original six folds.
+    expect(rollingOrigins(issued, 268, 28, 6)).toEqual([100, 128, 156, 184, 212, 240]);
+    expect(rollingOrigins([], 300, 28, 6)).toEqual([]);
   });
 });
 
@@ -69,17 +80,36 @@ describe("ForecastEngine with LSTM and continuous updating", () => {
       expect(Object.keys(first.ensemble.weights).sort()).toEqual(["ets", "lstm", "ridge"]);
       expect(stages).toContain("Training LSTM");
 
-      const nextAsOf = releaseDays(s, asOf, 7);
+      const nextAsOf = releaseDays(s, asOf, 1); // one day: a shift that breaks weekday alignment
       const second = await engine.run(s, nextAsOf);
       expect(second.version).toBe(2);
       expect(second.lstm?.action).toBe("fine-tuned");
       expect(second.lstm?.backtestVersion).toBe(1);
       expect(second.dates[0]).not.toBe(first.dates[0]);
       expect(second.ensemble.forecast).not.toEqual(first.ensemble.forecast);
+      // Every model is backtested on the same folds (the ensemble combines fold k of each model).
+      const originsOf = (r: typeof second, id: "ets" | "ridge" | "lstm") => r.models[id]?.folds.map((f) => f.origin);
+      expect(originsOf(second, "ets")).toEqual(originsOf(second, "lstm"));
+      expect(originsOf(second, "ridge")).toEqual(originsOf(second, "lstm"));
+      expect(second.baselines.ma28.folds.map((f) => f.origin)).toEqual(originsOf(second, "lstm"));
+      expect(second.ensemble.folds.map((f) => f.origin)).toEqual(originsOf(second, "lstm"));
+      // One day later no new 28-day window is complete, so the backtest (and its accuracy) is unchanged.
+      expect(originsOf(second, "lstm")).toEqual(originsOf(first, "lstm"));
+      expect(second.ensemble.metrics.wape).toBeCloseTo(first.ensemble.metrics.wape, 9);
 
-      const third = await engine.run(s, nextAsOf, undefined, { retrainLstm: true });
+      // 28 days after the first forecast, that real out-of-sample LSTM forecast joins the backtest.
+      const later = releaseDays(s, nextAsOf, 27);
+      const fourth = await engine.run(s, later);
+      expect(fourth.lstm?.action).toBe("fine-tuned");
+      const o = originsOf(fourth, "lstm") as number[];
+      expect(o.at(-1)).toBe(asOf);
+      expect(o).toHaveLength(6);
+      expect(originsOf(fourth, "ets")).toEqual(o);
+      expect(fourth.models.lstm?.folds.at(-1)?.forecast).toEqual(first.models.lstm?.forecast);
+
+      const third = await engine.run(s, later, undefined, { retrainLstm: true });
       expect(third.lstm?.action).toBe("trained");
-      expect(third.lstm?.backtestVersion).toBe(3);
+      expect(third.lstm?.backtestVersion).toBe(4);
       engine.dispose();
     },
     240_000,

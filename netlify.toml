@@ -31,6 +31,19 @@
   [headers.values]
     Cache-Control = "public, max-age=300"
 
+# A missing build asset or data file must be a real 404, never the HTML shell: after a redeploy an
+# old page asking for an old chunk would otherwise receive HTML as JavaScript (cached immutably).
+# Existing files are served first, so these rules only apply to missing ones.
+[[redirects]]
+  from = "/assets/*"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/data/*"
+  to = "/404.html"
+  status = 404
+
 # Single-page app (hash routing); any other path serves the app shell.
 [[redirects]]
   from = "/*"

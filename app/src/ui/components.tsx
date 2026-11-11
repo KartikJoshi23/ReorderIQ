@@ -31,7 +31,7 @@ export function Card({ title, subtitle, actions, children, className, delay = 0 
             {title && <h2 className="text-[15px] font-semibold tracking-tight text-ink">{title}</h2>}
             {subtitle && <p className="mt-0.5 text-[12.5px] leading-snug text-ink-3">{subtitle}</p>}
           </div>
-          {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+          {actions && <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">{actions}</div>}
         </header>
       )}
       {children}

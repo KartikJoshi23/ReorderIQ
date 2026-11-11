@@ -147,6 +147,7 @@ function debounce(key: string, ms: number, fn: () => void) {
   timers[key] = setTimeout(fn, ms);
 }
 
+const UPDATING = "Models are updating…";
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** Policy inputs shared by every consumer. */
@@ -165,7 +166,12 @@ export const useApp = create<AppState>()((set, get) => {
     const { series: stored, asOf, promoPlan } = get();
     if (!stored) return;
     const series = withPromoPlan(stored, asOf, promoPlan);
-    set({ forecastStatus: "running", forecastError: undefined });
+    const busy = get().forecastStatus === "running";
+    // No LSTM yet means the first full training is still running, on data that is now out of date:
+    // abandon it so this run trains on the new data straight away instead of queuing behind it.
+    // (A fine-tune in progress is left to finish: cancelling it would force a full retrain.)
+    if (kind !== "initial" && busy && !get().forecast?.lstm) void fc().cancel();
+    set({ forecastStatus: "running", forecastError: undefined, forecastProgress: busy ? { stage: "Waiting for the previous model update", fraction: 0 } : null });
     const onProgress = Comlink.proxy((p: EngineProgress) => {
       if (token === forecastToken) set({ forecastProgress: p });
     });
@@ -187,6 +193,10 @@ export const useApp = create<AppState>()((set, get) => {
             : "LSTM trained (rolling backtest)";
       accept(full, action, performance.now() - t0);
       set({ forecastStatus: "idle", forecastProgress: null });
+      const msg = get().dataMessage;
+      if (msg?.tone === "good" && msg.text.endsWith(UPDATING)) {
+        set({ dataMessage: { tone: "good", text: `${msg.text.slice(0, -UPDATING.length)}Models updated (v${full.version}, WAPE ${(100 * full.ensemble.metrics.wape).toFixed(1)}%).` } });
+      }
     } catch (e) {
       if (token === forecastToken) set({ forecastStatus: "error", forecastError: errorText(e), forecastProgress: null });
     }
@@ -247,7 +257,9 @@ export const useApp = create<AppState>()((set, get) => {
     const settings = optimiseSettings(s, s.forecast);
     if (!settings) return;
     const token = ++optToken;
-    set({ boStatus: "running", boIterations: [], grid: null, frontier: [], shadow: null });
+    // A grid check or frontier still running belongs to the previous settings: its result will be
+    // discarded, so release its status too (otherwise its button would stay disabled).
+    set({ boStatus: "running", boIterations: [], grid: null, gridStatus: "idle", frontier: [], frontierStatus: "idle", shadow: null });
     const scenario = scenarioInputs(s.forecast, s.leadTime);
     const onIteration = Comlink.proxy((it: BoIteration) => {
       if (token === optToken) set((st) => ({ boIterations: [...st.boIterations, { ...it, details: undefined } as BoIteration] }));
@@ -292,7 +304,7 @@ export const useApp = create<AppState>()((set, get) => {
     impactToken++;
     return {
       mc: null, mcBaselineStockout: null, scenarios: null, bo: null, boIterations: [], grid: null, frontier: [], shadow: null, sim: {},
-      boStatus: "idle" as const, riskStatus: "idle" as const, impact: null, impactStatus: "idle" as const, impactProgress: null, impactStale: false, promoPlan: 1,
+      boStatus: "idle" as const, riskStatus: "idle" as const, gridStatus: "idle" as const, frontierStatus: "idle" as const, impact: null, impactStatus: "idle" as const, impactProgress: null, impactStale: false, promoPlan: 1,
     };
   }
 
@@ -406,6 +418,7 @@ export const useApp = create<AppState>()((set, get) => {
       // Abandon forecasts for the previous series (incl. an LSTM still training), then start fresh.
       void fc().cancel();
       void fc().reset();
+      void impactClient?.cancel(); // drop queued replay re-forecasts for the previous series
       void runForecast("initial");
     },
 
@@ -417,7 +430,7 @@ export const useApp = create<AppState>()((set, get) => {
         set({ dataMessage: { tone: "critical", text: "No more held-back data — add new observations to go further." } });
         return;
       }
-      set({ asOf: next, dataMessage: { tone: "good", text: `Released ${next - asOf} day(s) of actual sales up to ${dateAt(series, next)}. Models are updating…` } });
+      set({ asOf: next, dataMessage: { tone: "good", text: `Released ${next - asOf} day(s) of actual sales up to ${dateAt(series, next)}. ${UPDATING}` } });
       void runForecast("update");
     },
 
@@ -426,7 +439,7 @@ export const useApp = create<AppState>()((set, get) => {
       if (!series) return false;
       try {
         const r = applyObservations(series, asOf, rows);
-        set({ series: r.series, asOf: r.asOf, dataMessage: { tone: "good", text: `Added ${r.added} new day(s)${r.revised ? `, corrected ${r.revised}` : ""}. Models are updating…` } });
+        set({ series: r.series, asOf: r.asOf, dataMessage: { tone: "good", text: `Added ${r.added} new day(s)${r.revised ? `, corrected ${r.revised}` : ""}. ${UPDATING}` } });
         void runForecast("update");
         return true;
       } catch (e) {
@@ -451,13 +464,28 @@ export const useApp = create<AppState>()((set, get) => {
       markImpactStale();
     },
     setLeadTime(patch) {
-      set((s) => ({ leadTime: { ...s.leadTime, ...patch } }));
+      // The L and σ_L sliders define a parametric model. Moving one while the uploaded records are in
+      // use switches to Gamma; otherwise the formula would use the slider while Monte Carlo kept
+      // sampling the records. The records stay available in the distribution selector.
+      set((s) => {
+        const sliderMoved = patch.mean !== undefined || patch.sd !== undefined;
+        const kind = s.leadTime.kind === "empirical" && sliderMoved && patch.kind === undefined ? "gamma" : (patch.kind ?? s.leadTime.kind);
+        return { leadTime: { ...s.leadTime, ...patch, kind } };
+      });
       scheduleRisk();
       scheduleOptimisation();
       markImpactStale();
     },
     setLeadTimeKind(kind) {
-      set((s) => ({ leadTime: { ...s.leadTime, kind } }));
+      set((s) => {
+        const samples = s.leadTime.samples;
+        if (kind !== "empirical" || !samples?.length) return { leadTime: { ...s.leadTime, kind } };
+        // Back to the records: L and σ_L must again describe them, not the last slider position.
+        const n = samples.length;
+        const mean = samples.reduce((a, b) => a + b, 0) / n;
+        const sd = n > 1 ? Math.sqrt(samples.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1)) : 0;
+        return { leadTime: { ...s.leadTime, kind, mean, sd } };
+      });
       scheduleRisk();
       scheduleOptimisation();
       markImpactStale();
@@ -502,7 +530,7 @@ export const useApp = create<AppState>()((set, get) => {
         const grid = await opt().grid({ scenario: scenarioInputs(s.forecast, s.leadTime), settings }, 30);
         if (token === optToken) set({ grid, gridStatus: "idle" });
       } catch {
-        set({ gridStatus: "error" });
+        if (token === optToken) set({ gridStatus: "error" });
       }
     },
 
@@ -520,7 +548,7 @@ export const useApp = create<AppState>()((set, get) => {
         await opt().frontier({ scenario: scenarioInputs(s.forecast, s.leadTime), settings, seed: 9 }, undefined, onPoint);
         if (token === optToken) set({ frontierStatus: "idle" });
       } catch {
-        set({ frontierStatus: "error" });
+        if (token === optToken) set({ frontierStatus: "error" });
       }
     },
   };

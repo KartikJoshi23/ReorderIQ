@@ -125,9 +125,30 @@ export class CancelledError extends Error {
 interface LstmState {
   key: string;
   model: LstmModel;
-  folds: FoldForecast[];
+  /**
+   * Every LSTM forecast issued so far, keyed by origin: the rolling-backtest folds plus the final
+   * forecast of each later run. Each used only data up to its origin, so each is out-of-sample.
+   */
+  issued: Map<number, Float64Array>;
   backtestVersion: number;
   backend: string;
+}
+
+/**
+ * Backtest origins after a fine-tune. All models must share fold origins (the ensemble combines
+ * fold k of every model), but the LSTM cannot be re-backtested at new origins without retraining.
+ * So the folds are drawn from origins where the LSTM really issued a forecast, whose full horizon
+ * of actuals is known by `asOf`: the latest one, then each next one at least a horizon earlier
+ * (non-overlapping), up to `count` folds, oldest first.
+ */
+export function rollingOrigins(issued: Iterable<number>, asOf: number, horizon: number, count: number): number[] {
+  const complete = [...issued].filter((o) => o + horizon <= asOf).sort((a, b) => b - a);
+  const out: number[] = [];
+  for (const o of complete) {
+    if (out.length === count) break;
+    if (!out.length || o <= (out[out.length - 1] as number) - horizon) out.push(o);
+  }
+  return out.reverse();
 }
 
 export class ForecastEngine {
@@ -160,7 +181,13 @@ export class ForecastEngine {
     const report = (stage: string, fraction: number, lstm?: LstmProgress) => onProgress?.({ stage, fraction, lstm });
 
     const s = extendCalendar(series, Math.max(series.length, asOf + 1 + H));
-    const origins = foldOrigins(s, asOf, this.settings.backtest);
+    const useLstm = opts.useLstm ?? this.settings.useLstm;
+    const key = `${s.source}:${s.id}`;
+    const st = this.lstmState;
+    const canFineTune = useLstm && !opts.retrainLstm && st !== null && st.key === key && asOf >= st.model.origin;
+    // Fine-tune: fold origins come from the LSTM's issued forecasts so every model shares them.
+    const rolled = canFineTune && st ? rollingOrigins(st.issued.keys(), asOf, H, this.settings.backtest.folds) : [];
+    const origins = rolled.length ? rolled : foldOrigins(s, asOf, this.settings.backtest);
     if (!origins.length) throw new Error("Not enough history before the selected date to backtest the models.");
     const allOrigins = [...origins, asOf];
     const naiveScale = seasonalNaiveScale(s.sales, (i) => s.closed[i] === 0 && Number.isFinite(s.sales[i] as number), s.modelStart, origins[0] as number);
@@ -206,12 +233,9 @@ export class ForecastEngine {
 
     // --- LSTM: full rolling train or warm-start fine-tune --------------------------------------
     let lstmInfo: LstmInfo | undefined;
-    if (opts.useLstm ?? this.settings.useLstm) {
+    if (useLstm) {
       t0 = performance.now();
       const backend = await initTensorflow();
-      const key = `${s.source}:${s.id}`;
-      const st = this.lstmState;
-      const canFineTune = !opts.retrainLstm && st !== null && st.key === key && asOf >= st.model.origin;
       const lstmProgress = (stage: string, base: number, span: number) => (p: LstmProgress) =>
         report(stage, base + span * (p.epoch / p.epochs), p);
 
@@ -225,7 +249,11 @@ export class ForecastEngine {
             check();
           }
         }
-        models.lstm = { forecast: forecastLstm(st.model, s, buildHistory(s, asOf), H), folds: st.folds, metrics: foldMetrics(st.folds, naiveScale) };
+        const forecast = forecastLstm(st.model, s, buildHistory(s, asOf), H);
+        // The first forecast issued at an origin is kept (a later what-if at the same date does not replace it).
+        if (!st.issued.has(asOf)) st.issued.set(asOf, forecast);
+        const folds = origins.map((o) => fold(o, st.issued.get(o) as Float64Array));
+        models.lstm = { forecast, folds, metrics: foldMetrics(folds, naiveScale) };
         lstmInfo = { backend: st.backend, action: "fine-tuned", epochsRun: st.model.epochsRun, trainedThrough: dateAt(s, asOf), backtestVersion: st.backtestVersion };
       } else {
         disposeLstm(st?.model);
@@ -244,7 +272,9 @@ export class ForecastEngine {
             if (origin === asOf) models.lstm = { forecast: f, folds, metrics: foldMetrics(folds, naiveScale) };
             else folds.push(fold(origin, f));
           }
-          this.lstmState = { key, model, folds, backtestVersion: this.version + 1, backend };
+          const issued = new Map<number, Float64Array>(folds.map((f) => [f.origin, f.forecast]));
+          if (models.lstm) issued.set(asOf, models.lstm.forecast);
+          this.lstmState = { key, model, issued, backtestVersion: this.version + 1, backend };
           lstmInfo = { backend, action: "trained", epochsRun: model.epochsRun, trainedThrough: dateAt(s, asOf), backtestVersion: this.version + 1 };
         } catch (e) {
           disposeLstm(model);
